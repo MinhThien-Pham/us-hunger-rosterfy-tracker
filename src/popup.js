@@ -830,6 +830,127 @@ function parseOperationalDays(descriptionText) {
   return { travelDay, eventDay, returnDay };
 }
 
+
+function titleCaseDayDate(value) {
+  return String(value || "")
+    .replace(/\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Tues|Wed|Weds|Thu|Thur|Thurs|Fri|Sat|Sun)\b/gi, match => {
+      const normalized = normalizeDayToken(match);
+      return normalized || match.charAt(0).toUpperCase() + match.slice(1).toLowerCase();
+    })
+    .replace(/\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b/gi, match => match.charAt(0).toUpperCase() + match.slice(1).toLowerCase())
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeScheduleLabel(label) {
+  return String(label || "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*:\s*$/g, "")
+    .replace(/\bEVENT\b/g, "Event")
+    .replace(/\bFRIDAY\b/g, "Friday")
+    .trim();
+}
+
+function scheduleKindFromLabel(label) {
+  const value = String(label || "").toLowerCase();
+  const hasReturn = /return/.test(value);
+  const hasTravel = /travel|fly/.test(value);
+  const hasSetup = /setup|load\s*in|load-in/.test(value);
+  const hasEvent = /event/.test(value);
+  if (hasReturn && hasEvent) return "eventReturn";
+  if (hasReturn) return "return";
+  if (hasTravel && hasSetup) return "travelSetup";
+  if (hasSetup && hasEvent) return "setupEvent";
+  if (hasTravel) return "travel";
+  if (hasSetup) return "setup";
+  if (hasEvent) return "event";
+  return "project";
+}
+
+function parseScheduleItems(descriptionText) {
+  const lines = cleanDescriptionText(descriptionText || "").split("\n").map(line => line.trim()).filter(Boolean);
+  const items = [];
+  const knownLabelPattern = /^(?:Travel\s*\/\s*Load\s*in|Travel\s*&\s*Load\s*in|Travel\s+and\s+Load\s*in|Travel\s*\/\s*Setup|Travel\s*&\s*Setup|Travel\s+and\s+Setup|Travel\s*in|Travel|Fly\s*in|Load\s*in\s*\/\s*Setup|Load\s*in|Setup\s*&\s*Event\s*Day|Setup\s*and\s*Event\s*Day|Setup\s*\/\s*Event\s*Day|Setup\s*Day|Setup|Event\s*Day\s*(?:&|and|\/)\s*Return|Event\s*Day\s*\d*|EVENT|Return\s*Travel|Return\s*Day|Return)\b/i;
+  const scheduleDatePattern = /\b(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tues|Tue|Wed|Weds|Thurs|Thur|Thu|Fri|Sat|Sun)\.?\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tues|Tue|Wed|Weds|Thurs|Thur|Thu|Fri|Sat|Sun)\.?)\b/i;
+
+  function makeItem(labelValue, dateValue, rawLine) {
+    const label = normalizeScheduleLabel(labelValue);
+    const rawDate = titleCaseDayDate(dateValue);
+    if (!label || !rawDate || !knownLabelPattern.test(label)) return null;
+    const dayNameMatch = rawDate.match(/\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tues|Tue|Wed|Weds|Thurs|Thur|Thu|Fri|Sat|Sun)\.?\b/i);
+    return {
+      label,
+      dateText: rawDate,
+      dayName: dayNameMatch ? normalizeDayToken(dayNameMatch[1]) : "",
+      kind: scheduleKindFromLabel(label),
+      rawLine
+    };
+  }
+
+  for (const line of lines) {
+    if (/\b\d+\s*(?:leads?|asst\s*leads?|support)\b/i.test(line)) continue;
+
+    let item = null;
+    const colonIndex = line.indexOf(":");
+    if (colonIndex > -1) {
+      const labelPart = line.slice(0, colonIndex).trim();
+      const datePart = line.slice(colonIndex + 1).trim();
+      const dateMatch = datePart.match(scheduleDatePattern);
+      item = makeItem(labelPart, dateMatch ? dateMatch[0] : datePart, line);
+    } else {
+      const dateMatch = line.match(scheduleDatePattern);
+      if (dateMatch) {
+        const beforeDate = line.slice(0, dateMatch.index).trim();
+        const afterDate = line.slice(dateMatch.index + dateMatch[0].length).trim();
+        const labelPart = beforeDate || afterDate;
+        item = makeItem(labelPart, dateMatch[0], line);
+      }
+    }
+
+    if (item) items.push(item);
+  }
+  return items;
+}
+
+function parseCrewNeed(descriptionText) {
+  const firstLine = cleanDescriptionText(descriptionText || "").split("\n").find(line => /\b\d+\s*(?:leads?|asst\s*leads?|support)\b/i.test(line)) || "";
+  const leadMatch = firstLine.match(/(\d+)\s*leads?\b/i);
+  const supportMatch = firstLine.match(/(\d+)\s*support\b/i);
+  const asstLeadMatch = firstLine.match(/(\d+)\s*asst\s*leads?\b/i);
+  return {
+    leadCount: leadMatch ? numberOrZero(leadMatch[1]) : null,
+    supportCount: supportMatch ? numberOrZero(supportMatch[1]) : null,
+    asstLeadCount: asstLeadMatch ? numberOrZero(asstLeadMatch[1]) : null,
+    sourceText: firstLine
+  };
+}
+
+function getProjectDayCount(project) {
+  if (project.scheduleItems?.length) return project.scheduleItems.length;
+  if (project.isOneDay) return 1;
+  return project.daysInRange?.length || 0;
+}
+
+function crewNeedHtml(project) {
+  const crew = project.crewNeed || {};
+  const lead = crew.leadCount === null || crew.leadCount === undefined ? "—" : formatNumber(crew.leadCount);
+  const support = crew.supportCount === null || crew.supportCount === undefined ? "—" : formatNumber(crew.supportCount);
+  const asst = crew.asstLeadCount ? `<div><strong>${escapeHtml(formatNumber(crew.asstLeadCount))}</strong> <span>asst</span></div>` : "";
+  return `<div class="crew-need"><div><strong>${escapeHtml(lead)}</strong> <span>lead</span></div>${asst}<div><strong>${escapeHtml(support)}</strong> <span>support</span></div></div>`;
+}
+
+function scheduleHtml(project) {
+  if (project.scheduleItems?.length) {
+    return `<div class="schedule-list">${project.scheduleItems.map(item => `<div><strong>${escapeHtml(item.dateText)}</strong>: ${escapeHtml(item.label)}</div>`).join("")}</div>`;
+  }
+  if (project.startDate || project.endDate) {
+    const start = project.startDate || project.startTimestamp || "—";
+    const end = project.endDate && project.endDate !== project.startDate ? ` to ${project.endDate}` : "";
+    return `<div class="schedule-list muted">${escapeHtml(start)}${escapeHtml(end)}</div>`;
+  }
+  return `<span class="muted">—</span>`;
+}
+
 function getDateRangeWeekdays(startIso, endIso) {
   if (!startIso || !endIso) return [];
   const start = new Date(startIso);
@@ -936,6 +1057,8 @@ function normalizeProject(event, myEvent, promotedEvent, myShift) {
   const descriptionText = htmlToText(obj.description || "");
   const location = parseLocationFromName(name, descriptionText);
   const operationalDays = parseOperationalDays(descriptionText);
+  const scheduleItems = parseScheduleItems(descriptionText);
+  const crewNeed = parseCrewNeed(descriptionText);
   const my = getMyEventStatus(myEvent, myShift);
   const applicationStatus = permissions.apply === true ? "open" : "closed";
   const daysInRange = getDateRangeWeekdays(obj.start_timestamp, obj.end_timestamp);
@@ -953,6 +1076,8 @@ function normalizeProject(event, myEvent, promotedEvent, myShift) {
     locationConfidence: location.locationConfidence,
 
     description: descriptionText,
+    scheduleItems,
+    crewNeed,
     startTimestamp: obj.start_timestamp || "",
     endTimestamp: obj.end_timestamp || "",
     startDate: nice.start_timestamp__date || "",
@@ -1108,6 +1233,98 @@ function makeEstimatePart(label, hoursLow, hoursHigh, confidence, reason, settin
   return { label, hoursLow: low, hoursHigh: high, grossLow, grossHigh, netLow, netHigh, confidence, reason };
 }
 
+
+function formatEstimateDateText(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+  const month = date.toLocaleString("en-US", { month: "short" });
+  const dayNum = date.getDate();
+  const dayName = WEEKDAYS[date.getDay()];
+  return `${month} ${dayNum} ${dayName}`;
+}
+
+function getProjectCalendarDates(project) {
+  if (!project.startTimestamp || !project.endTimestamp) return [];
+  const start = new Date(project.startTimestamp);
+  const end = new Date(project.endTimestamp);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return [];
+
+  const cursor = new Date(start);
+  cursor.setHours(0, 0, 0, 0);
+  const last = new Date(end);
+  last.setHours(0, 0, 0, 0);
+
+  const dates = [];
+  while (cursor <= last && dates.length < 10) {
+    dates.push(new Date(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+}
+
+function buildDateRangeEstimateItems(project, outOfStateTravel) {
+  if (project.scheduleItems?.length || project.isOneDay) return [];
+  const dates = getProjectCalendarDates(project);
+  if (dates.length < 3) return [];
+
+  const items = [];
+  const lastIndex = dates.length - 1;
+  const middleCount = Math.max(0, dates.length - (outOfStateTravel ? 2 : 0));
+
+  dates.forEach((date, index) => {
+    let label = "Event day";
+    let kind = "event";
+
+    if (outOfStateTravel && index === 0) {
+      label = "Travel/Load in";
+      kind = middleCount === 1 ? "travelSetup" : "travel";
+    } else if (outOfStateTravel && index === lastIndex) {
+      label = "Return Travel";
+      kind = "return";
+    } else if (outOfStateTravel) {
+      const middleIndex = index - 1;
+      if (middleCount === 1) {
+        label = "Event day";
+        kind = "event";
+      } else if (middleIndex === 0) {
+        label = "Setup day";
+        kind = "setup";
+      } else if (middleCount === 2) {
+        label = "Event day";
+        kind = "event";
+      } else {
+        label = `Event day ${middleIndex}`;
+        kind = "event";
+      }
+    } else if (dates.length === 3) {
+      if (index === 0) {
+        label = "Setup day";
+        kind = "setup";
+      } else {
+        label = `Event day ${index}`;
+        kind = "event";
+      }
+    } else if (dates.length > 3) {
+      if (index === 0) {
+        label = "Setup day";
+        kind = "setup";
+      } else {
+        label = `Event day ${index}`;
+        kind = "event";
+      }
+    }
+
+    items.push({
+      label,
+      dateText: formatEstimateDateText(date),
+      dayName: WEEKDAYS[date.getDay()],
+      kind,
+      inferred: true,
+      rawLine: "Estimated from project date range"
+    });
+  });
+  return items;
+}
+
 function estimateTravelPart(project, label, settings) {
   const airport = getProjectAirport(project);
   if (!airport) {
@@ -1184,7 +1401,6 @@ function getEventEstimateConfig(project, settings, outOfStateTravel, large, medi
 function estimateProjectEarnings(project) {
   const settings = getEarningsSettings();
   const parts = [];
-  const text = `${project.name} ${project.description}`;
   const outOfStateTravel = isOutOfStateTravelProject(project);
   const setupSignal = hasSetupSignal(project);
   const eventSignal = hasEventDaySignal(project);
@@ -1192,50 +1408,84 @@ function estimateProjectEarnings(project) {
   const eventOnlyTitle = /\bevent\s*day\b/i.test(project.name) && !/\bsetup\b/i.test(project.name);
   const large = isLargeProject(project);
   const mediumLarge = isMediumLargeProject(project);
-  const setupAndEventSameCalendarDay = project.isOneDay && setupSignal && (eventSignal || hasCombinedSetupEventSignal(project));
-  const travelAndLoadInSameCalendarDay = outOfStateTravel && setupSignal && hasCombinedTravelLoadInSignal(project);
-  let travelToPart = null;
 
-  if (outOfStateTravel) {
-    travelToPart = estimateTravelPart(project, "Travel to", settings);
-    if (!travelAndLoadInSameCalendarDay) {
-      parts.push(travelToPart);
-    }
-  }
-
-  if (setupAndEventSameCalendarDay) {
+  function eventPart(label) {
     const eventConfig = getEventEstimateConfig(project, settings, outOfStateTravel, large, mediumLarge);
-    const setupPart = makeSetupPart(project, "Setup / load-in", settings);
-    const eventPart = makeEstimatePart("Event day", eventConfig.hours[0], eventConfig.hours[1], eventConfig.confidence, eventConfig.reason, settings);
-    parts.push(combineEstimateParts(
-      "Setup + event day",
-      [setupPart, eventPart],
-      `${setupPart.reason} ${eventPart.reason}`,
-      settings
-    ));
-  } else if (setupSignal && !eventOnlyTitle) {
-    const setupPart = makeSetupPart(project, outOfStateTravel ? "Setup day" : "Setup / load-in", settings);
-    if (travelAndLoadInSameCalendarDay && travelToPart) {
-      parts.push(combineEstimateParts(
-        "Travel + load-in",
-        [travelToPart, setupPart],
-        `${travelToPart.reason} ${setupPart.reason}`,
-        settings
-      ));
-    } else {
-      parts.push(setupPart);
+    return makeEstimatePart(label, eventConfig.hours[0], eventConfig.hours[1], eventConfig.confidence, eventConfig.reason, settings);
+  }
+
+  function setupPart(label) {
+    return makeSetupPart(project, label, settings);
+  }
+
+  function partFromScheduleItem(item) {
+    const kind = item.kind;
+    if (kind === "return") return estimateTravelPart(project, item.label, settings);
+    if (kind === "eventReturn") {
+      return outOfStateTravel
+        ? combineEstimateParts(item.label, [eventPart(item.label), estimateTravelPart(project, item.label, settings)], "Event work and return travel on the same calendar day.", settings)
+        : eventPart(item.label);
     }
+    if (kind === "travel") return estimateTravelPart(project, item.label, settings);
+    if (kind === "travelSetup") {
+      return combineEstimateParts(item.label, [estimateTravelPart(project, item.label, settings), setupPart(item.label)], "Paid travel plus load-in/setup on the same calendar day.", settings);
+    }
+    if (kind === "setupEvent") {
+      return combineEstimateParts(item.label, [setupPart(item.label), eventPart(item.label)], "Setup/load-in and event work on the same calendar day.", settings);
+    }
+    if (kind === "setup") return setupPart(item.label);
+    if (kind === "event") return eventPart(item.label);
+    return eventPart(item.label || "Project day");
   }
 
-  const shouldAddEvent = !setupAndEventSameCalendarDay && (!setupOnlyTitle || eventSignal || !setupSignal);
-  if (shouldAddEvent) {
-    const eventConfig = getEventEstimateConfig(project, settings, outOfStateTravel, large, mediumLarge);
-    const label = setupOnlyTitle ? "Setup shift" : eventOnlyTitle || eventSignal ? "Event day" : project.isOneDay ? "Project day" : "Event / project day";
-    parts.push(makeEstimatePart(label, eventConfig.hours[0], eventConfig.hours[1], eventConfig.confidence, eventConfig.reason, settings));
-  }
+  const inferredScheduleItems = buildDateRangeEstimateItems(project, outOfStateTravel);
 
-  if (outOfStateTravel) {
-    parts.push(estimateTravelPart(project, "Travel back", settings));
+  if (project.scheduleItems?.length) {
+    for (const item of project.scheduleItems) {
+      const part = partFromScheduleItem(item);
+      part.dateText = item.dateText;
+      part.sourceLabel = item.label;
+      part.kind = item.kind;
+      parts.push(part);
+    }
+  } else if (inferredScheduleItems.length) {
+    for (const item of inferredScheduleItems) {
+      const part = partFromScheduleItem(item);
+      part.dateText = item.dateText;
+      part.sourceLabel = item.label;
+      part.kind = item.kind;
+      part.inferred = true;
+      part.reason = `${part.reason} This day was inferred from the project date range because Rosterfy did not provide a detailed day-by-day schedule.`;
+      parts.push(part);
+    }
+  } else {
+    const setupAndEventSameCalendarDay = project.isOneDay && setupSignal && (eventSignal || hasCombinedSetupEventSignal(project));
+    const travelAndLoadInSameCalendarDay = outOfStateTravel && setupSignal && hasCombinedTravelLoadInSignal(project);
+    let travelToPart = null;
+
+    if (outOfStateTravel) {
+      travelToPart = estimateTravelPart(project, "Travel", settings);
+      if (!travelAndLoadInSameCalendarDay) parts.push(travelToPart);
+    }
+
+    if (setupAndEventSameCalendarDay) {
+      parts.push(combineEstimateParts("Setup + event day", [setupPart("Setup"), eventPart("Event day")], "Setup/load-in and event work on the same calendar day.", settings));
+    } else if (setupSignal && !eventOnlyTitle) {
+      const setup = setupPart(outOfStateTravel ? "Setup day" : "Setup / load-in");
+      if (travelAndLoadInSameCalendarDay && travelToPart) {
+        parts.push(combineEstimateParts("Travel + load-in", [travelToPart, setup], "Paid travel plus load-in/setup on the same calendar day.", settings));
+      } else {
+        parts.push(setup);
+      }
+    }
+
+    const shouldAddEvent = !setupAndEventSameCalendarDay && (!setupOnlyTitle || eventSignal || !setupSignal);
+    if (shouldAddEvent) {
+      const label = setupOnlyTitle ? "Setup shift" : eventOnlyTitle || eventSignal ? "Event day" : project.isOneDay ? "Project day" : "Event / project day";
+      parts.push(eventPart(label));
+    }
+
+    if (outOfStateTravel) parts.push(estimateTravelPart(project, "Return Travel", settings));
   }
 
   if (!parts.length) {
@@ -1293,7 +1543,7 @@ function estimateTooltipHtml(project) {
       <div class="estimate-tooltip-grid ${singleDay ? "single" : ""}">
         ${estimate.parts.map((part, index) => `
           <div class="estimate-tooltip-part ${singleDay ? "single" : ""}">
-            <div class="estimate-tooltip-part-title">Day ${index + 1} — ${escapeHtml(part.label)}</div>
+            <div class="estimate-tooltip-part-title">${escapeHtml(part.dateText ? `${part.dateText}: ${part.label}` : `Day ${index + 1} — ${part.label}`)}</div>
             <div class="estimate-tooltip-values ${escapeHtml(confidenceClass(part.confidence))}">
               <span>${escapeHtml(formatHoursRange(part.hoursLow, part.hoursHigh))}</span>
               <span>${escapeHtml(formatMoneyRange(part.netLow, part.netHigh))} net</span>
@@ -1338,7 +1588,7 @@ function estimateDetailHtml(project) {
       <div class="estimate-breakdown">
         ${estimate.parts.map((part, index) => `
           <div class="estimate-part">
-            <div class="estimate-part-title">Day ${index + 1} — ${escapeHtml(part.label)}</div>
+            <div class="estimate-part-title">${escapeHtml(part.dateText ? `${part.dateText}: ${part.label}` : `Day ${index + 1} — ${part.label}`)}</div>
             <div class="estimate-part-values ${escapeHtml(confidenceClass(part.confidence))}">${escapeHtml(formatHoursRange(part.hoursLow, part.hoursHigh))} · Gross ${escapeHtml(formatMoneyRange(part.grossLow, part.grossHigh))} · Net ${escapeHtml(formatMoneyRange(part.netLow, part.netHigh))}</div>
             <div class="muted">${escapeHtml(part.reason)}</div>
           </div>
@@ -2048,7 +2298,7 @@ function renderTable() {
 
   hideEstimateTooltip();
   if (!filteredProjects.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="empty-state">No projects match the current filters.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="empty-state">No projects match the current filters.</td></tr>`;
     return;
   }
 
@@ -2063,21 +2313,14 @@ function renderTable() {
             <div class="project-badges">${flagBadgesHtml(project)}</div>
           </div>
         </div>
-        <div class="project-desc">${descriptionHtml(project.description, 260)}</div>
       </td>
+      <td>${crewNeedHtml(project)}</td>
       <td>
         <strong>${escapeHtml(project.city)}, ${escapeHtml(displayStateLabel(project.state))}</strong>
         ${project.address ? `<div class="muted">${escapeHtml(project.address)}</div>` : ""}
       </td>
-      <td>
-        <div>${escapeHtml(project.startDate || project.startTimestamp)}</div>
-        <div class="muted">to ${escapeHtml(project.endDate || project.endTimestamp)}</div>
-      </td>
-      <td>
-        <div>Travel: ${escapeHtml(project.travelDay || "—")}</div>
-        <div>Event: ${escapeHtml(project.eventDay || "—")}</div>
-        <div>Return: ${escapeHtml(project.returnDay || "—")}</div>
-      </td>
+      <td class="day-count"><strong>${escapeHtml(formatNumber(getProjectDayCount(project) || 0))}</strong></td>
+      <td>${scheduleHtml(project)}</td>
       <td>
         <div>${escapeHtml(formatNumber(project.mealCount))}</div>
         <div class="muted">${escapeHtml(project.mealType || "")}</div>
@@ -2133,7 +2376,7 @@ function detailRow(label, value) {
   return `
     <div class="detail-row">
       <dt>${escapeHtml(label)}</dt>
-      <dd>${escapeHtml(value)}</dd>
+      <dd>${escapeHtml(value).replace(/\n/g, "<br>")}</dd>
     </div>
   `;
 }
@@ -2167,6 +2410,8 @@ function showProjectDetail(projectId) {
       ${detailRow("Address", project.address)}
       ${detailRow("Start", project.startDate || project.startTimestamp)}
       ${detailRow("End", project.endDate || project.endTimestamp)}
+      ${detailRow("Project days", String(getProjectDayCount(project) || "—"))}
+      ${detailRow("Schedule", project.scheduleItems?.length ? project.scheduleItems.map(item => `${item.dateText}: ${item.label}`).join("\n") : "")}
       ${detailRow("Travel/Load-in", project.travelDay || "—")}
       ${detailRow("Event day", project.eventDay || "—")}
       ${detailRow("Return", project.returnDay || "—")}

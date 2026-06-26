@@ -1573,3 +1573,66 @@ body.full-page .summary-grid {
     text-align: left;
   }
 }
+
+/* Patch: compact schedule/staff table and cleaner estimated-pay styling */
+:root {
+  --amber: #c8ad00;
+  --amber-soft: #fff8cc;
+}
+
+table {
+  min-width: 1220px;
+}
+
+.crew-need {
+  min-width: 72px;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.crew-need strong {
+  font-weight: 900;
+}
+
+.crew-need span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.day-count {
+  text-align: center;
+  font-size: 16px;
+}
+
+.schedule-list {
+  min-width: 230px;
+  max-width: 320px;
+  line-height: 1.45;
+}
+
+.schedule-list div + div {
+  margin-top: 3px;
+}
+
+.estimate-part-title {
+  color: var(--text) !important;
+  font-weight: 900;
+}
+
+.estimate-part-values,
+.estimate-tooltip-values {
+  font-weight: 900;
+}
+
+.estimate-tooltip-part-title {
+  color: var(--text);
+}
+
+@media (max-width: 760px) {
+  table {
+    min-width: 1180px;
+  }
+  .schedule-list {
+    min-width: 220px;
+  }
+}

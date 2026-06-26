@@ -121,3 +121,40 @@ Hover over the Est. Pay cell to see the per-day breakdown. Details also shows th
 - Tooltip now shows only day, estimated hours, net, and gross values.
 - Confidence is represented by color only: green = high, yellow = medium, red = low.
 - Project/header confidence now uses an average of the underlying estimates instead of always taking the lowest confidence day.
+
+## Latest patch: compact staffing/schedule table
+
+- Replaced duplicate Dates/Days table display with:
+  - Crew Need: lead/support counts parsed from the project description.
+  - Days: number of explicit project schedule entries when available.
+  - Schedule: date + label from the Rosterfy project description, such as `Wednesday 7/28: Travel/Load in`.
+- Removed the long project description text from the table row to reduce duplicate schedule information.
+- Estimated pay day labels now use the schedule labels from the Rosterfy description when available, for example `Return Travel` instead of a fixed `Travel back` label.
+- Estimated pay detail styling now matches the hover popup style: day title is black/bold, while money/hour values are bold and colored by confidence.
+
+
+## Patch note: schedule date parser fix
+
+- Fixed schedule rows where lines like `Event Day 6/25 Thursday` were being parsed as `/25 Thursday: Event Day 6`.
+- The parser now supports both `Label: Wednesday 7/28` and `Label 6/25 Thursday` formats.
+- Table schedule and estimated pay breakdown now use the corrected date/label split.
+
+## Patch note: inferred multi-day earnings
+
+- Fixed estimated pay for projects that only provide a broad date range such as `Monday-Thursday` without a detailed day-by-day schedule.
+- When no explicit schedule rows are available, the estimator now uses every calendar day in the project date range instead of collapsing the project into only Travel / Event / Return.
+- For out-of-state multi-day projects, the estimator infers first day as Travel, last day as Return Travel, and middle days as Project/Event days. These inferred days remain lower confidence than explicit Rosterfy schedule rows.
+
+## Patch note: inferred schedule labels
+
+- Date-range fallback no longer uses generic `Project day 1` / `Project day 2` labels.
+- For 3-day out-of-state projects without explicit schedule rows, the estimator now infers:
+  - Day 1: `Travel/Load in`
+  - Day 2: `Event day`
+  - Day 3: `Return Travel`
+- For 4+ day out-of-state projects, the estimator uses:
+  - first day: `Travel/Load in`
+  - second day: `Setup day`
+  - middle event days: `Event day`, `Event day 2`, etc.
+  - last day: `Return Travel`
+- These fallback labels are only used when Rosterfy does not provide explicit day-by-day schedule lines.
