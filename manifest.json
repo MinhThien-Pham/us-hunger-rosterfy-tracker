@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "US Hunger Rosterfy Tracker",
+  "version": "0.1.0",
+  "description": "Track US Hunger Rosterfy opportunities, applications, confirmations, map counts, and calendar exports.",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://ushunger.rosterfy.com/*",
+    "https://tile.openstreetmap.org/*",
+    "https://s3.us-east-2.amazonaws.com/*",
+    "https://storage.r2.rosterfy.com/*"
+  ],
+  "action": {
+    "default_title": "US Hunger Tracker"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://ushunger.rosterfy.com/*"
+      ],
+      "js": [
+        "src/content.js"
+      ]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/page-fetcher.js"
+      ],
+      "matches": [
+        "https://ushunger.rosterfy.com/*"
+      ]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' data: https://tile.openstreetmap.org https://s3.us-east-2.amazonaws.com https://storage.r2.rosterfy.com https://*.rosterfy.com;"
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  }
+}

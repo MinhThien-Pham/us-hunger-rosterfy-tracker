@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>US Hunger Rosterfy Tracker</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="header">
+        <div>
+          <h1>US Hunger Tracker</h1>
+          <p id="tabStatus" class="muted">Checking current tab...</p>
+        </div>
+        <div class="header-actions">
+          <span id="syncStatus" class="pill muted-pill">Not synced</span>
+          <div class="header-button-row">
+            <button id="syncAllBtn" class="primary">Sync</button>
+            <button id="refreshMyBtn">Refresh Apps</button>
+            <button id="settingsToggleBtn" class="settings-toggle" aria-expanded="false">☰ More</button>
+          </div>
+        </div>
+      </header>
+
+      <section id="notRosterfyPanel" class="panel hidden">
+        <h2>Open US Hunger Rosterfy</h2>
+        <p>This extension only runs on <strong>ushunger.rosterfy.com</strong>.</p>
+        <button id="openRosterfyBtn" class="primary">Open Rosterfy</button>
+      </section>
+
+      <section id="dashboard" class="hidden">
+        <section id="settingsPanel" class="panel settings-panel hidden">
+          <div class="settings-grid">
+            <button id="exportCsvBtn" disabled>Export CSV</button>
+            <button id="exportFilteredIcsBtn" disabled>Export Filtered ICS</button>
+            <button id="exportConfirmedIcsBtn" disabled>Export Confirmed ICS</button>
+            <button id="clearLocalHistoryBtn" type="button">Clear local history</button>
+          </div>
+
+          <details class="advanced-panel">
+            <summary>Advanced API URL override</summary>
+            <p class="muted">Only use this if auto-sync breaks and you need to paste exact Request URLs from Rosterfy Network. Do not paste cookies, auth headers, or tokens.</p>
+            <label class="stacked-label" for="eventUrlInput">Event API Request URL</label>
+            <textarea id="eventUrlInput" rows="2" placeholder="https://ushunger.rosterfy.com/.../api/v2/event?..." spellcheck="false"></textarea>
+            <label class="stacked-label" for="myEventUrlInput">My Applications API Request URL</label>
+            <textarea id="myEventUrlInput" rows="2" placeholder="https://ushunger.rosterfy.com/.../api/v2/me/event?..." spellcheck="false"></textarea>
+          </details>
+        </section>
+
+        <section class="summary-grid" id="summaryGrid"></section>
+
+        <section class="workspace-grid">
+          <div class="left-pane">
+        <section class="panel map-panel">
+          <div class="panel-title-row">
+            <h2>US Map / State / City Summary</h2>
+            <select id="countModeSelect">
+              <option value="projects">Count projects</option>
+              <option value="meals">Sum meals</option>
+              <option value="lines">Sum lines</option>
+            </select>
+          </div>
+          <div id="geoMap" class="geo-map empty-state">Sync data to see geographic map.</div>
+          <div id="stateSummary" class="state-summary empty-state">Sync data to see project distribution.</div>
+          <div id="citySummary" class="city-summary hidden"></div>
+        </section>
+          </div>
+
+        <section class="panel table-panel">
+          <div class="table-tools">
+            <input id="searchInput" type="search" placeholder="Company, city, state, meal type..." />
+            <button id="searchBtn" class="primary">Search</button>
+            <button id="filterToggleBtn" class="filter-toggle" aria-expanded="false">Filter</button>
+            <span id="resultCount" class="muted result-count"></span>
+          </div>
+
+          <section id="filterDrawer" class="filter-drawer filters hidden">
+            <div class="filter-row">
+              <span class="filter-label">Application</span>
+              <button class="chip" data-filter-group="application" data-filter-value="open">Open</button>
+              <button class="chip" data-filter-group="application" data-filter-value="closed">Closed</button>
+            </div>
+
+            <div class="filter-row">
+              <span class="filter-label">My Status</span>
+              <button class="chip" data-filter-group="myStatus" data-filter-value="unapplied">Unapplied</button>
+              <button class="chip" data-filter-group="myStatus" data-filter-value="applied">Applied</button>
+              <button class="chip" data-filter-group="myStatus" data-filter-value="confirm">Pending</button>
+              <button class="chip" data-filter-group="myStatus" data-filter-value="confirmed">Confirmed</button>
+            </div>
+
+            <div class="filter-row">
+              <span class="filter-label">Flags</span>
+              <button class="chip" data-filter-group="flag" data-filter-value="new">New</button>
+              <button class="chip" data-filter-group="flag" data-filter-value="reopened">Reopened</button>
+              <button class="chip" data-filter-group="flag" data-filter-value="starred">Starred</button>
+              <button class="chip" data-filter-group="flag" data-filter-value="closingSoon">Closing soon</button>
+              <button class="chip" data-filter-group="flag" data-filter-value="promoted">Promoted</button>
+            </div>
+
+            <div class="filter-row">
+              <span class="filter-label">Location</span>
+              <button class="chip" data-filter-group="location" data-filter-value="florida">Florida</button>
+              <button class="chip" data-filter-group="location" data-filter-value="outOfState">Out-of-state</button>
+              <button class="chip" data-filter-group="location" data-filter-value="warehouse">Warehouse</button>
+            </div>
+
+            <div class="filter-row wrap">
+              <label class="filter-label" for="weekdaySelect">Weekday</label>
+              <select id="weekdaySelect">
+                <option value="">Any weekday</option>
+                <option value="Monday">Monday</option>
+                <option value="Tuesday">Tuesday</option>
+                <option value="Wednesday">Wednesday</option>
+                <option value="Thursday">Thursday</option>
+                <option value="Friday">Friday</option>
+                <option value="Saturday">Saturday</option>
+                <option value="Sunday">Sunday</option>
+              </select>
+
+              <select id="weekdayTypeSelect">
+                <option value="anyProjectDay">Any project day</option>
+                <option value="travelDay">Travel/Load-in day</option>
+                <option value="eventDay">Event day</option>
+                <option value="returnDay">Return day</option>
+                <option value="startDay">Start day</option>
+                <option value="endDay">End day</option>
+              </select>
+            </div>
+
+            <div class="filter-row wrap">
+              <label class="filter-label" for="dateStartInput">Date range</label>
+              <input id="dateStartInput" type="date" aria-label="Start date" />
+              <span class="muted inline-muted">to</span>
+              <input id="dateEndInput" type="date" aria-label="End date" />
+              <select id="dateModeSelect" aria-label="Date range mode">
+                <option value="include">Overlaps range</option>
+                <option value="exclude">Exclude range</option>
+              </select>
+              <select id="durationSelect" aria-label="Project duration">
+                <option value="">Any length</option>
+                <option value="oneDay">One-day project</option>
+                <option value="multiDay">Multi-day project</option>
+              </select>
+              <button id="clearFiltersBtn">Clear filters</button>
+            </div>
+          </section>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Project</th>
+                  <th>Location</th>
+                  <th>Dates</th>
+                  <th>Days</th>
+                  <th>Meals</th>
+                  <th>Lines</th>
+                  <th>Est. Pay</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="projectsTbody">
+                <tr>
+                  <td colspan="9" class="empty-state">No data yet. Open Rosterfy and click Sync.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        </section>
+      </section>
+
+      <div id="projectModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="projectModalTitle">
+        <div class="modal-card">
+          <button id="closeProjectModalBtn" class="modal-close" aria-label="Close project details">×</button>
+          <div id="projectModalBody"></div>
+        </div>
+      </div>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
