@@ -108,3 +108,16 @@ The estimate is a range and is color-coded:
 - Red: lower confidence
 
 Hover over the Est. Pay cell to see the per-day breakdown. Details also shows the same breakdown. This is only a planning estimate; actual paid time still depends on lead/event-manager clock-in/out instructions and Paylocity punches.
+
+## Latest UI cleanup
+
+- Renamed the summary card from `Est. Confirmed Pay` to `Est. Pay` and placed it between `Confirmed` and `Meals`.
+- Removed colored estimate boxes; estimate values now use colored bold text only.
+- Replaced the browser-native black tooltip with an instant custom tooltip that matches the dashboard UI and uses a wider multi-column breakdown.
+
+## Update: compact estimated-pay tooltip
+
+- Est. Pay tooltip is more compact for one-day projects.
+- Tooltip now shows only day, estimated hours, net, and gross values.
+- Confidence is represented by color only: green = high, yellow = medium, red = low.
+- Project/header confidence now uses an average of the underlying estimates instead of always taking the lowest confidence day.

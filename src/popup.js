@@ -191,6 +191,8 @@ let geoMapCenterLon = -96.5;
 let isDraggingMap = false;
 let mapDragStart = null;
 let mapGlobalEventsWired = false;
+let activeEstimateTooltip = null;
+let activeEstimateTooltipAnchor = null;
 
 const filters = {
   application: null, // null | open | closed
@@ -1049,9 +1051,9 @@ function confidenceRank(confidence) {
 
 function combineConfidence(parts) {
   if (!parts.length) return "low";
-  const min = Math.min(...parts.map(part => confidenceRank(part.confidence)));
-  if (min >= 3) return "high";
-  if (min === 2) return "medium";
+  const avg = parts.reduce((sum, part) => sum + confidenceRank(part.confidence), 0) / parts.length;
+  if (avg >= 2.5) return "high";
+  if (avg >= 1.75) return "medium";
   return "low";
 }
 
@@ -1130,6 +1132,55 @@ function estimateTravelPart(project, label, settings) {
   return makeEstimatePart(label, low, high, confidence, reason, settings);
 }
 
+function hasCombinedSetupEventSignal(project) {
+  return /\bsetup\s*(?:&|and|\/)\s*event\s*day\b|\bsetup\s*(?:&|and|\/)\s*event\b/i.test(`${project.name} ${project.description}`);
+}
+
+function hasCombinedTravelLoadInSignal(project) {
+  return /\btravel\s*(?:\/|&|and)?\s*(?:load\s*in|load-in|setup)\b|\btravel\/load\s*in\b/i.test(`${project.name} ${project.description}`);
+}
+
+function combineEstimateParts(label, sourceParts, reason, settings) {
+  const totals = sourceParts.reduce((acc, part) => {
+    acc.hoursLow += part.hoursLow;
+    acc.hoursHigh += part.hoursHigh;
+    return acc;
+  }, { hoursLow: 0, hoursHigh: 0 });
+  return makeEstimatePart(label, totals.hoursLow, totals.hoursHigh, combineConfidence(sourceParts), reason, settings);
+}
+
+function makeSetupPart(project, label, settings) {
+  return makeEstimatePart(
+    label,
+    settings.defaultSetupHours[0],
+    settings.defaultSetupHours[1],
+    project.description ? "medium" : "low",
+    "Setup/load-in found in project title or description. Onboarding guidance said setup/teardown days are often around 3–4 hours.",
+    settings
+  );
+}
+
+function getEventEstimateConfig(project, settings, outOfStateTravel, large, mediumLarge) {
+  let hours = settings.defaultEventHours;
+  let confidence = project.isOneDay && !outOfStateTravel ? "high" : "medium";
+  let reason = "Regular event-day estimate.";
+
+  if (large) {
+    hours = settings.defaultLargeEventHours;
+    confidence = "medium";
+    reason = "Large project estimate based on 1MM meal goal or high line count. Onboarding guidance said million meal packs can run 8–10 hours, sometimes longer.";
+  } else if (mediumLarge) {
+    hours = [6, 8];
+    confidence = "medium";
+    reason = "Medium/large project estimate based on meal goal or 40+ lines.";
+  } else if (project.isWarehouse || project.state === "FL") {
+    hours = settings.defaultLocalEventHours;
+    reason = "Local/warehouse project estimate. Actual paid time depends on the lead's clock-in/out cues.";
+  }
+
+  return { hours, confidence, reason };
+}
+
 function estimateProjectEarnings(project) {
   const settings = getEarningsSettings();
   const parts = [];
@@ -1141,43 +1192,46 @@ function estimateProjectEarnings(project) {
   const eventOnlyTitle = /\bevent\s*day\b/i.test(project.name) && !/\bsetup\b/i.test(project.name);
   const large = isLargeProject(project);
   const mediumLarge = isMediumLargeProject(project);
+  const setupAndEventSameCalendarDay = project.isOneDay && setupSignal && (eventSignal || hasCombinedSetupEventSignal(project));
+  const travelAndLoadInSameCalendarDay = outOfStateTravel && setupSignal && hasCombinedTravelLoadInSignal(project);
+  let travelToPart = null;
 
   if (outOfStateTravel) {
-    parts.push(estimateTravelPart(project, "Travel to", settings));
+    travelToPart = estimateTravelPart(project, "Travel to", settings);
+    if (!travelAndLoadInSameCalendarDay) {
+      parts.push(travelToPart);
+    }
   }
 
-  if (setupSignal && !eventOnlyTitle) {
-    parts.push(makeEstimatePart(
-      outOfStateTravel ? "Setup day" : "Setup / load-in",
-      settings.defaultSetupHours[0],
-      settings.defaultSetupHours[1],
-      project.description ? "medium" : "low",
-      setupSignal ? "Setup/load-in found in project title or description. Onboarding guidance said setup/teardown days are often around 3–4 hours." : "Default setup estimate.",
+  if (setupAndEventSameCalendarDay) {
+    const eventConfig = getEventEstimateConfig(project, settings, outOfStateTravel, large, mediumLarge);
+    const setupPart = makeSetupPart(project, "Setup / load-in", settings);
+    const eventPart = makeEstimatePart("Event day", eventConfig.hours[0], eventConfig.hours[1], eventConfig.confidence, eventConfig.reason, settings);
+    parts.push(combineEstimateParts(
+      "Setup + event day",
+      [setupPart, eventPart],
+      `${setupPart.reason} ${eventPart.reason}`,
       settings
     ));
+  } else if (setupSignal && !eventOnlyTitle) {
+    const setupPart = makeSetupPart(project, outOfStateTravel ? "Setup day" : "Setup / load-in", settings);
+    if (travelAndLoadInSameCalendarDay && travelToPart) {
+      parts.push(combineEstimateParts(
+        "Travel + load-in",
+        [travelToPart, setupPart],
+        `${travelToPart.reason} ${setupPart.reason}`,
+        settings
+      ));
+    } else {
+      parts.push(setupPart);
+    }
   }
 
-  const shouldAddEvent = !setupOnlyTitle || eventSignal || !setupSignal;
+  const shouldAddEvent = !setupAndEventSameCalendarDay && (!setupOnlyTitle || eventSignal || !setupSignal);
   if (shouldAddEvent) {
-    let hours = settings.defaultEventHours;
-    let confidence = project.isOneDay && !outOfStateTravel ? "high" : "medium";
-    let reason = "Regular event-day estimate.";
-
-    if (large) {
-      hours = settings.defaultLargeEventHours;
-      confidence = "medium";
-      reason = "Large project estimate based on 1MM meal goal or high line count. Onboarding guidance said million meal packs can run 8–10 hours, sometimes longer.";
-    } else if (mediumLarge) {
-      hours = [6, 8];
-      confidence = "medium";
-      reason = "Medium/large project estimate based on meal goal or 40+ lines.";
-    } else if (project.isWarehouse || project.state === "FL") {
-      hours = settings.defaultLocalEventHours;
-      reason = "Local/warehouse project estimate. Actual paid time depends on the lead's clock-in/out cues.";
-    }
-
+    const eventConfig = getEventEstimateConfig(project, settings, outOfStateTravel, large, mediumLarge);
     const label = setupOnlyTitle ? "Setup shift" : eventOnlyTitle || eventSignal ? "Event day" : project.isOneDay ? "Project day" : "Event / project day";
-    parts.push(makeEstimatePart(label, hours[0], hours[1], confidence, reason, settings));
+    parts.push(makeEstimatePart(label, eventConfig.hours[0], eventConfig.hours[1], eventConfig.confidence, eventConfig.reason, settings));
   }
 
   if (outOfStateTravel) {
@@ -1210,35 +1264,64 @@ function estimateProjectEarnings(project) {
   };
 }
 
-function estimateBreakdownText(project) {
+function confidenceLabel(confidence) {
+  if (confidence === "high") return "High";
+  if (confidence === "medium") return "Medium";
+  return "Low";
+}
+
+function confidenceClass(confidence) {
+  return `estimate-${confidence || "low"}`;
+}
+
+function estimateTooltipHtml(project) {
   const estimate = project.earningsEstimate;
-  if (!estimate) return "No estimate available.";
-  const lines = [
-    "Estimated Pay Breakdown",
-    "",
-    `Rate: ${formatMoney(estimate.hourlyRate)}/hour`,
-    `Net ratio: ${(estimate.netRatio * 100).toFixed(1)}% based on latest paycheck`,
-    ""
-  ];
-  estimate.parts.forEach((part, index) => {
-    lines.push(`Day ${index + 1} — ${part.label}`);
-    lines.push(`${formatHoursRange(part.hoursLow, part.hoursHigh)} · Gross ${formatMoneyRange(part.grossLow, part.grossHigh)} · Net ${formatMoneyRange(part.netLow, part.netHigh)}`);
-    lines.push(`Confidence: ${part.confidence.toUpperCase()}`);
-    lines.push(`Reason: ${part.reason}`);
-    lines.push("");
-  });
-  lines.push(`Totals: ${estimate.hoursLabel} · ${estimate.grossLabel} · ${estimate.label}`);
-  return lines.join("\n");
+  if (!estimate) return `<div class="estimate-tooltip-body">No estimate available.</div>`;
+  const singleDay = estimate.parts.length === 1;
+  return `
+    <div class="estimate-tooltip-body ${singleDay ? "estimate-tooltip-single" : ""}">
+      <div class="estimate-tooltip-header">
+        <div>
+          <div class="estimate-tooltip-title">Estimated Pay Breakdown</div>
+          <div class="muted">Rate ${escapeHtml(formatMoney(estimate.hourlyRate))}/hour · Net ratio ${(estimate.netRatio * 100).toFixed(1)}%</div>
+        </div>
+        <div class="estimate-tooltip-total ${escapeHtml(confidenceClass(estimate.confidence))}">
+          <strong>${escapeHtml(estimate.label)}</strong>
+          <span>${escapeHtml(estimate.hoursLabel)}</span>
+        </div>
+      </div>
+      <div class="estimate-tooltip-grid ${singleDay ? "single" : ""}">
+        ${estimate.parts.map((part, index) => `
+          <div class="estimate-tooltip-part ${singleDay ? "single" : ""}">
+            <div class="estimate-tooltip-part-title">Day ${index + 1} — ${escapeHtml(part.label)}</div>
+            <div class="estimate-tooltip-values ${escapeHtml(confidenceClass(part.confidence))}">
+              <span>${escapeHtml(formatHoursRange(part.hoursLow, part.hoursHigh))}</span>
+              <span>${escapeHtml(formatMoneyRange(part.netLow, part.netHigh))} net</span>
+              <span>${escapeHtml(formatMoneyRange(part.grossLow, part.grossHigh))} gross</span>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+      ${singleDay ? "" : `
+        <div class="estimate-tooltip-footer ${escapeHtml(confidenceClass(estimate.confidence))}">
+          <strong>Totals:</strong>
+          <span>${escapeHtml(estimate.hoursLabel)}</span>
+          <span>${escapeHtml(estimate.label)}</span>
+          <span>${escapeHtml(estimate.grossLabel)}</span>
+        </div>
+      `}
+    </div>
+  `;
 }
 
 function estimateCellHtml(project) {
   const estimate = project.earningsEstimate;
   if (!estimate) return `<span class="muted">—</span>`;
   return `
-    <div class="estimate-cell estimate-${escapeHtml(estimate.confidence)}" title="${escapeHtml(estimateBreakdownText(project))}">
-      <div class="estimate-net">${escapeHtml(estimate.label)}</div>
-      <div class="estimate-hours">${escapeHtml(estimate.hoursLabel)}</div>
-    </div>
+    <button class="estimate-cell ${escapeHtml(confidenceClass(estimate.confidence))}" type="button" data-project-id="${escapeHtml(project.id)}" aria-label="Show estimated pay breakdown">
+      <span class="estimate-net">${escapeHtml(estimate.label)}</span>
+      <span class="estimate-hours">${escapeHtml(estimate.hoursLabel)}</span>
+    </button>
   `;
 }
 
@@ -1254,10 +1337,9 @@ function estimateDetailHtml(project) {
       </div>
       <div class="estimate-breakdown">
         ${estimate.parts.map((part, index) => `
-          <div class="estimate-part estimate-${escapeHtml(part.confidence)}">
+          <div class="estimate-part">
             <div class="estimate-part-title">Day ${index + 1} — ${escapeHtml(part.label)}</div>
-            <div>${escapeHtml(formatHoursRange(part.hoursLow, part.hoursHigh))} · Gross ${escapeHtml(formatMoneyRange(part.grossLow, part.grossHigh))} · Net ${escapeHtml(formatMoneyRange(part.netLow, part.netHigh))}</div>
-            <div class="muted">Confidence: ${escapeHtml(part.confidence.toUpperCase())}</div>
+            <div class="estimate-part-values ${escapeHtml(confidenceClass(part.confidence))}">${escapeHtml(formatHoursRange(part.hoursLow, part.hoursHigh))} · Gross ${escapeHtml(formatMoneyRange(part.grossLow, part.grossHigh))} · Net ${escapeHtml(formatMoneyRange(part.netLow, part.netHigh))}</div>
             <div class="muted">${escapeHtml(part.reason)}</div>
           </div>
         `).join("")}
@@ -1769,22 +1851,22 @@ function renderSummary() {
 
   const cards = [
     ["Projects", filteredProjects.length],
-    ["Est. Confirmed Pay", confirmedEstimate.label, confirmedEstimate.hoursLabel, `estimate-${confirmedEstimate.confidence}`],
     ["Promoted", promoted],
     ["Open", open],
     ["Closed", closed],
     ["Applied", applied],
     ["Pending", confirm],
     ["Confirmed", confirmed],
+    ["Est. Pay", confirmedEstimate.label, confirmedEstimate.hoursLabel, confidenceClass(confirmedEstimate.confidence)],
     ["Meals", formatNumber(totalMeals)],
     ["Lines", formatNumber(totalLines)]
   ];
 
-  $("#summaryGrid").innerHTML = cards.map(([label, value, subvalue, cls]) => `
-    <div class="summary-card ${cls ? escapeHtml(cls) : ""}">
+  $("#summaryGrid").innerHTML = cards.map(([label, value, subvalue, valueClass]) => `
+    <div class="summary-card">
       <div class="label">${escapeHtml(label)}</div>
-      <div class="value">${escapeHtml(value)}</div>
-      ${subvalue ? `<div class="summary-subvalue">${escapeHtml(subvalue)}</div>` : ""}
+      <div class="value ${valueClass ? escapeHtml(valueClass) : ""}">${escapeHtml(value)}</div>
+      ${subvalue ? `<div class="summary-subvalue ${valueClass ? escapeHtml(valueClass) : ""}">${escapeHtml(subvalue)}</div>` : ""}
     </div>
   `).join("");
 }
@@ -1916,10 +1998,55 @@ function renderCitySummary(state) {
   });
 }
 
+function hideEstimateTooltip() {
+  if (activeEstimateTooltip) {
+    activeEstimateTooltip.remove();
+    activeEstimateTooltip = null;
+    activeEstimateTooltipAnchor = null;
+  }
+}
+
+function positionEstimateTooltip(anchor, tooltip) {
+  const rect = anchor.getBoundingClientRect();
+  const margin = 12;
+  const tooltipRect = tooltip.getBoundingClientRect();
+  let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
+  left = Math.max(margin, Math.min(left, window.innerWidth - tooltipRect.width - margin));
+  let top = rect.bottom + 8;
+  if (top + tooltipRect.height > window.innerHeight - margin) {
+    top = Math.max(margin, rect.top - tooltipRect.height - 8);
+  }
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+}
+
+function showEstimateTooltip(projectId, anchor) {
+  const project = getProjectById(projectId);
+  if (!project || !project.earningsEstimate) return;
+  hideEstimateTooltip();
+  const tooltip = document.createElement("div");
+  tooltip.className = project.earningsEstimate.parts.length === 1 ? "estimate-tooltip single" : "estimate-tooltip";
+  tooltip.innerHTML = estimateTooltipHtml(project);
+  document.body.appendChild(tooltip);
+  activeEstimateTooltip = tooltip;
+  activeEstimateTooltipAnchor = anchor;
+  positionEstimateTooltip(anchor, tooltip);
+}
+
+function wireEstimateTooltips() {
+  $$(".estimate-cell").forEach(button => {
+    button.addEventListener("mouseenter", () => showEstimateTooltip(button.dataset.projectId, button));
+    button.addEventListener("mouseleave", hideEstimateTooltip);
+    button.addEventListener("focus", () => showEstimateTooltip(button.dataset.projectId, button));
+    button.addEventListener("blur", hideEstimateTooltip);
+  });
+}
+
 function renderTable() {
   const tbody = $("#projectsTbody");
   $("#resultCount").textContent = `${filteredProjects.length} shown`;
 
+  hideEstimateTooltip();
   if (!filteredProjects.length) {
     tbody.innerHTML = `<tr><td colspan="9" class="empty-state">No projects match the current filters.</td></tr>`;
     return;
@@ -1973,6 +2100,8 @@ function renderTable() {
       toggleProjectStar(button.dataset.projectId);
     });
   });
+
+  wireEstimateTooltips();
 
   $$(".detail-project-btn").forEach(button => {
     button.addEventListener("click", () => showProjectDetail(button.dataset.projectId));
@@ -2516,6 +2645,9 @@ function wireEvents() {
     filters.countMode = event.target.value;
     renderStateSummary();
   });
+
+  window.addEventListener("scroll", hideEstimateTooltip, true);
+  window.addEventListener("resize", hideEstimateTooltip);
 }
 
 async function init() {
